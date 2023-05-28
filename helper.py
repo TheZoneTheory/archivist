@@ -118,7 +118,6 @@ def get_work_embed(work: ao3.Work, user_id=None):
 
         work_embed.set_footer(text=footer_content)
         work_embed.set_thumbnail(url=work.authors[0].pfp)
-
         return work_embed
     except Exception as e:
         print(e)

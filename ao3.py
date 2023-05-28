@@ -172,8 +172,12 @@ class Pseud(AO3Item):
         for i in range(0, len(elms)):
             self.__works.items[i] = Work.parse_listing(elms[i])
         pfp = soup.select_one(':not(.userstuff).icon a img')
-        self.__pfp = pfp.get('src')
-        self.__pfp_alt_text = pfp.get('alt')
+        if "s3.amazonaws.com" in str(pfp):
+            self.__pfp = pfp.get('src')
+            self.__pfp_alt_text = pfp.get('alt')
+        else:
+            self.__pfp = baseURL+'/images/skins/iconsets/default/icon_user.png'
+            self.__pfp_alt_text = ""
 
     @property
     def name(self):

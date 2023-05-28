@@ -1,4 +1,8 @@
 # TODO: add return type hints to ao3 api
+
+"""import requests
+from bs4 import BeautifulSoup"""
+
 from helper import *
 
 intents = discord.Intents.all()
@@ -8,6 +12,16 @@ bot = discord.Bot(intents=intents)
 @bot.event
 async def on_ready():
     print('Logged in')
+    """try:
+        work = ao3.Work(38607129)
+        #r = requests.get(ao3.baseURL)
+        #soup = BeautifulSoup(r.text, 'lxml')
+        await bot.get_channel(1110331594557902919).send("BOT RESTARTED SUCCESSFULLY")
+        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="IT WORKED!"))
+    except Exception as e:
+        await bot.get_channel(1110331594557902919).send("BOT FAILED TO START PROPERLY:\n"+str(e))
+        await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="FUCK!!!"))"""
+
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="You Read"))
 
 

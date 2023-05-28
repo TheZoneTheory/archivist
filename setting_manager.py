@@ -1,12 +1,4 @@
 import pickle
-from enum import Enum
-
-
-class AllowRules(Enum):
-    ALLOW = 0  # no filter
-    SFW = 1  # block in r18 channels
-    NSFW = 2  # only allow in r18 channels
-    BLOCK = 3  # do not allow at all
 
 
 __template = {
