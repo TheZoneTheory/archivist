@@ -1,6 +1,7 @@
 import math
 import re
 import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 from html2text import html2text
 
@@ -24,6 +25,12 @@ Search
 -PHASE 4: people search, bookmark search
 
 """
+
+
+def request(url):
+    r = cloudscraper.CloudScraper().get(url)
+    return r
+
 
 
 class Unloaded:
@@ -101,7 +108,7 @@ class WorkPagination(Pagination):
         else:
             url += f"?page={page}"
 
-        r = requests.get(f'{url}')
+        r = request(f'{url}')
         if r.status_code != 200:
             raise AO3Exception("Resource not found.")
         soup = BeautifulSoup(r.text, 'lxml')
@@ -157,7 +164,7 @@ class Pseud(AO3Item):
         if self.__name is None:
             raise Exception("'name' field is unset")
         self.__url = f'{baseURL}/users/{self.__name}/' + ('' if self.__pseud is None else f'pseuds/{self.__pseud}/')
-        r = requests.get(self.__url)
+        r = request(self.__url)
         if r.status_code != 200 or "people/search" in r.url:
             raise AO3Exception("User or Pseud not found.")
         soup = BeautifulSoup(r.text, 'lxml')
@@ -176,7 +183,7 @@ class Pseud(AO3Item):
             self.__pfp = pfp.get('src')
             self.__pfp_alt_text = pfp.get('alt')
         else:
-            self.__pfp = baseURL+'/images/skins/iconsets/default/icon_user.png'
+            self.__pfp = baseURL + '/images/skins/iconsets/default/icon_user.png'
             self.__pfp_alt_text = ""
 
     @property
@@ -292,7 +299,7 @@ class Work(AO3Item):
     def load(self, url=None):
         if url is None:
             url = self.__url
-        r = requests.get(url)
+        r = request(url)
         if r.status_code != 200:
             raise AO3Exception("Work not found.")
         soup = BeautifulSoup(r.text, 'lxml')
@@ -358,7 +365,7 @@ class Work(AO3Item):
 
     def __load_end_notes(self):
         print(self.__last_chapter_url)
-        r = requests.get(self.__last_chapter_url)
+        r = request(self.__last_chapter_url)
         if r.status_code != 200:
             raise AO3Exception("Chapter not found.")
         soup = BeautifulSoup(r.text, 'lxml')
@@ -367,7 +374,6 @@ class Work(AO3Item):
         super()._check_property(self.__chapters)
         self.__chapters[-1] = Chapter(chapter_id, soup.select_one("#workskin .chapter"))
 
-
     @staticmethod
     def parse_listing(soup):
         work = Work()
@@ -375,7 +381,7 @@ class Work(AO3Item):
         work.__work_id = Work.get_work_id_from_url(work.__url)
         last_chapter_elm = soup.select_one(':not(.userstuff).stats dd.chapters a')
         work.__last_chapter_url = work.__url if last_chapter_elm is None else f"{baseURL}{last_chapter_elm.get('href')}"
-        #print("last chapter url: "+)
+        # print("last chapter url: "+)
         work.__title = soup.select_one(':not(.userstuff).header h4.heading a:not([ref=author])').text.strip()
         work.__rating = soup.select_one(':not(.userstuff).required-tags li .rating span').text.strip()
         work.__category = soup.select_one(':not(.userstuff).required-tags li .category span').text.strip()
@@ -486,7 +492,7 @@ class Work(AO3Item):
         }
         url = f'{baseURL}/works/search?commit=Search&work_search['
         url += "&work_search[".join([f"{param}]={params[param]}" for param in params.keys()])
-        r = requests.get(url)
+        r = request(url)
         if r.status_code != 200:
             raise AO3Exception("No works not found.")
         soup = BeautifulSoup(r.text, 'lxml')
@@ -644,7 +650,7 @@ class Chapter(AO3Item):
 
     def load(self, soup=None):
         if soup is None:
-            r = requests.get(self.__url)
+            r = request(self.__url)
             if r.status_code != 200:
                 raise AO3Exception("Chapter not found.")
             soup = BeautifulSoup(r.text, 'lxml')
@@ -741,7 +747,7 @@ class Tag(AO3Item):
     __works = Unloaded()
 
     def load(self):
-        r = requests.get(f"{baseURL}/tags/{self.name.replace('/', '*s*')}/")
+        r = request(f"{baseURL}/tags/{self.name.replace('/', '*s*')}/")
         if r.status_code != 200:
             raise AO3Exception("Tag not found.")
         soup = BeautifulSoup(r.text, 'lxml')
@@ -817,7 +823,7 @@ class Tag(AO3Item):
     @property
     def works(self):
         if self.__works is None:
-            r = requests.get(f'{self.__url}/works')
+            r = request(f'{self.__url}/works')
             if r.status_code != 200:
                 raise AO3Exception("Unable to find works for this tag.")
             self.soup = BeautifulSoup(r.text, 'lxml')
