@@ -33,7 +33,7 @@ def filter_works(ctx: discord.ApplicationContext, works) -> List:
     return filtered_works
 
 
-def get_work_embed(work: ao3.Work, user_id=None):
+def get_work_embed(work: ao3.Work, chapter: ao3.Chapter = None, user_id=None):
     try:
         # author, title, url
         work_authors = "by " + ', '.join([f'[{author.name}]({author.url})' for author in work.authors])
@@ -41,6 +41,18 @@ def get_work_embed(work: ao3.Work, user_id=None):
                       + f"{__rating_emoji[work.rating]} {work.rating}\n" \
                       + f"*{', '.join(work.archive_warnings)}*"
         work_embed = discord.Embed(title=work.title, description=description, url=work.url)
+
+        # chapter
+        if chapter is not None:
+            chapter_text = f'[{chapter.name}]({chapter.url})'
+            if chapter.summary:
+                chapter_text += f' | Summary: ||{textwrap.shorten(chapter.summary, width=1000, placeholder="...",)}||'
+
+            work_embed.add_field(
+                name=f"Chapter {chapter.number}",
+                value=chapter_text,
+                inline=False
+            )
 
         # fandoms
         fandoms = " | ".join([f'[{tag.name}]({tag.url}/works)' for tag in work.fandoms])

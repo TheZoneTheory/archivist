@@ -5,8 +5,6 @@ import cloudscraper
 from bs4 import BeautifulSoup
 from html2text import html2text
 
-baseURL = "https://archiveofourown.org"
-
 """classes:
 Pagination
 Work + WorkPagination
@@ -19,23 +17,38 @@ Search
 
 """planning:
 
--PHASE 1: tags, works, users
--PHASE 2: work search, tag search
--PHASE 3: comments
--PHASE 4: people search, bookmark search
+-PHASE 1: work, tags, work search, user/pseud metadata
+-PHASE 2: chapters, read comments, caching
+-PHASE 3: intractability: comments, kudos, etc.
 
 """
 
-
-def request(url):
-    r = cloudscraper.CloudScraper().get(url)
-    return r
-
+baseURL = "https://archiveofourown.org"
 
 
 class Unloaded:
     pass
 
+
+def request(url):
+    # r = cloudscraper.CloudScraper().get(url)
+    if not isinstance(url, str):
+        raise Exception("URL must be string")
+    else:
+        print("REQUEST: "+url)
+        r = requests.get(url)
+        print("STATUS: "+str(r.status_code))
+        return r
+
+def _format_text(text):
+    if text is None:
+        return None
+    return "".join(
+        [s for s in html2text(
+            html=str(text).replace("<blockquote", "<div").replace("</blockquote", "</div"),
+            bodywidth=0
+        ).splitlines(True) if s.strip("\r\n")]
+    ).strip()
 
 class AO3Item:
     def _check_property(self, prop, load=None):
@@ -48,17 +61,6 @@ class AO3Item:
     def load(self):
         pass
 
-    @staticmethod
-    def _format_text(text):
-        if text is None:
-            return None
-        return "".join(
-            [s for s in html2text(
-                html=str(text).replace("<blockquote", "<div").replace("</blockquote", "</div"),
-                bodywidth=0
-            ).splitlines(True) if s.strip("\r\n")]
-        ).strip()
-
 
 class AO3Exception(Exception):
     pass
@@ -66,11 +68,11 @@ class AO3Exception(Exception):
 
 class Pagination:
     # TODO: should be private variables
-    # TODO: implement slice method __getslice__
+    # TODO: implement slice method _getslice_
     url = Unloaded()
     items = Unloaded()
     page_size = Unloaded()
-    __item_selector = Unloaded()
+    _item_selector = Unloaded()
 
     def __init__(self, url, page_size, item_count):
         self.items = [None for i in range(item_count)]
@@ -96,7 +98,7 @@ class Pagination:
 
 
 class WorkPagination(Pagination):
-    __item_selector = ":not(.userstuff) li.work"
+    _item_selector = ":not(.userstuff) li.work"
 
     def fetch(self, index):
         page = math.floor(index / self.page_size) + 1
@@ -107,12 +109,12 @@ class WorkPagination(Pagination):
             url += f"&page={page}"
         else:
             url += f"?page={page}"
-
+        print("> WorkPagination:load")
         r = request(f'{url}')
         if r.status_code != 200:
             raise AO3Exception("Resource not found.")
         soup = BeautifulSoup(r.text, 'lxml')
-        elms = soup.select(self.__item_selector)
+        elms = soup.select(self._item_selector)
         start = (page - 1) * self.page_size
         for i in range(0, len(elms)):
             self.items[start + i] = Work.parse_listing(elms[i])
@@ -120,20 +122,21 @@ class WorkPagination(Pagination):
 
 
 class Pseud(AO3Item):
-    __name = Unloaded()
-    __pseud = Unloaded()
-    __main = Unloaded()
-    __url = Unloaded()
-    __pfp = Unloaded()  # url to profile picture
-    __pfp_alt_text = Unloaded()
-    __works = Unloaded()
+    _name = Unloaded()
+    _pseud = Unloaded()
+    _main = Unloaded()
+    _url = Unloaded()
+    _pfp = Unloaded()  # url to profile picture
+    _pfp_alt_text = Unloaded()
+    _works = Unloaded()
+    _soup = Unloaded()
     """ TODO:
-    __fandoms = Unloaded()
-    __series = Unloaded()
-    __bookmarks = Unloaded()
-    __collections = Unloaded()
-    __gifts = Unloaded()
-    __description = Unloaded()  # from ../users/{name}/pseuds page
+    _fandoms = Unloaded()
+    _series = Unloaded()
+    _bookmarks = Unloaded()
+    _collections = Unloaded()
+    _gifts = Unloaded()
+    _description = Unloaded()  # from ../users/{name}/pseuds page
     """
 
     def __init__(self, name=None, pseud=None):
@@ -142,97 +145,104 @@ class Pseud(AO3Item):
 
         if pseud == "orphan_account":
             pseud = None
-        self.__name = name
-        self.__pseud = pseud
+        self._name = name
+        self._pseud = pseud
         self.load()
 
     @staticmethod
     def parse_listing(soup):
         pseud = Pseud()
-        pseud.__url = f'{baseURL}{soup.get("href")}'
+        pseud._url = f'{baseURL}{soup.get("href")}'
         if ' ' in soup.text.strip():  # is pseud work
             names = soup.text.strip()[:-1].split(' (')
-            pseud.__pseud = names[0]
-            pseud.__name = names[1]
+            pseud._pseud = names[0]
+            pseud._name = names[1]
         else:
             name = soup.text.strip()
-            pseud.__name = name
-            pseud.__pseud = name
+            pseud._name = name
+            pseud._pseud = name
         return pseud
 
     def load(self):
-        if self.__name is None:
+        if self._name is None:
             raise Exception("'name' field is unset")
-        self.__url = f'{baseURL}/users/{self.__name}/' + ('' if self.__pseud is None else f'pseuds/{self.__pseud}/')
-        r = request(self.__url)
+        self._url = f'{baseURL}/users/{self._name}/' + ('' if self._pseud is None else f'pseuds/{self._pseud}/')
+        print("> Pseud:load")
+        r = request(self._url)
         if r.status_code != 200 or "people/search" in r.url:
             raise AO3Exception("User or Pseud not found.")
         soup = BeautifulSoup(r.text, 'lxml')
+        self._soup = soup
 
         work_count = int(re.sub(
             r'[^0-9]',
             '',
             soup.select(':not(.userstuff)#dashboard ul.navigation.actions')[1].select("li")[0].text
         ))
-        self.__works = WorkPagination(f"{self.__url}works", 20, work_count)
+        self._works = WorkPagination(f"{self._url}works", 20, work_count)
         elms = soup.select(":not(.userstuff) li.work")
         for i in range(0, len(elms)):
-            self.__works.items[i] = Work.parse_listing(elms[i])
+            self._works.items[i] = Work.parse_listing(elms[i])
         pfp = soup.select_one(':not(.userstuff).icon a img')
         if "s3.amazonaws.com" in str(pfp):
-            self.__pfp = pfp.get('src')
-            self.__pfp_alt_text = pfp.get('alt')
+            self._pfp = pfp.get('src')
+            self._pfp_alt_text = pfp.get('alt')
         else:
-            self.__pfp = baseURL + '/images/skins/iconsets/default/icon_user.png'
-            self.__pfp_alt_text = ""
+            self._pfp = baseURL + '/images/skins/iconsets/default/icon_user.png'
+            self._pfp_alt_text = ""
 
     @property
     def name(self):
-        super()._check_property(self.__name)
-        return self.__name
+        super()._check_property(self._name)
+        return self._name
 
     @property
     def pseud(self):
-        super()._check_property(self.__pseud)
-        return self.__pseud
+        super()._check_property(self._pseud)
+        return self._pseud
 
     @property
     def main(self):
-        super()._check_property(self.__main)
-        return self.__main
+        super()._check_property(self._main)
+        return self._main
 
     @property
     def url(self):
-        super()._check_property(self.__url)
-        return self.__url
+        super()._check_property(self._url)
+        return self._url
 
     @property
     def pfp(self):
-        super()._check_property(self.__pfp)
-        return self.__pfp
+        super()._check_property(self._pfp)
+        return self._pfp
 
     @property
     def pfp_alt_text(self):
-        super()._check_property(self.__pfp_alt_text)
-        return self.__pfp_alt_text
+        super()._check_property(self._pfp_alt_text)
+        return self._pfp_alt_text
 
     @property
     def works(self):
-        super()._check_property(self.__works)
-        return self.__works
+        super()._check_property(self._works)
+        return self._works
+
+    @property
+    def soup(self):
+        super()._check_property(self._soup)
+        return self._soup
 
 
 class User(Pseud):
-    __pseuds = Unloaded()
-    __collections = Unloaded()
-    __gifts = Unloaded()
+    _pseuds = Unloaded()
+    _collections = Unloaded()
+    _gifts = Unloaded()
     # profile
-    __has_parsed_profile = False
-    __title = Unloaded()
-    __join_date = Unloaded()
-    __user_id = Unloaded()
-    __location = Unloaded()
-    __bio = Unloaded()
+    _has_parsed_profile = False
+    _title = Unloaded()
+    _join_date = Unloaded()
+    _user_id = Unloaded()
+    _location = Unloaded()
+    _bio = Unloaded()
 
     """def __init__(self, name=None, pseud=None):
         if name is None:
@@ -252,8 +262,8 @@ class User(Pseud):
 
     @property
     def title(self):
-        super()._check_property(self.__title, self.load_profile)
-        return self.__title
+        super()._check_property(self._title, self.load_profile)
+        return self._title
 
     @property
     def main(self):
@@ -261,165 +271,164 @@ class User(Pseud):
 
 
 class Work(AO3Item):
-    __work_id = Unloaded()
-    __title = Unloaded()
-    __url = Unloaded()
-    __last_chapter_url = Unloaded()
-    __authors = Unloaded()
-    __rating = Unloaded()
-    __category = Unloaded()
-    __archive_warnings = Unloaded()
-    __fandoms = Unloaded()
-    __relationships = Unloaded()
-    __characters = Unloaded()
-    __tags = Unloaded()
-    __summary = Unloaded()
-    __start_notes = Unloaded()
-    __end_notes = Unloaded()
-    __language = Unloaded()
-    __published = Unloaded()
-    __updated = Unloaded()
-    __words = Unloaded()
-    __chapter_count = Unloaded()
-    __chapter_max = Unloaded()
-    __comment_count = Unloaded()
-    __kudos = Unloaded()
-    __bookmarks = Unloaded()
-    __hits = Unloaded()
-    __chapters = Unloaded()
-    __comments = "WIP"
+    _work_id = Unloaded()
+    _title = Unloaded()
+    _url = Unloaded()
+    _last_chapter_url = Unloaded()
+    _authors = Unloaded()
+    _rating = Unloaded()
+    _category = Unloaded()
+    _archive_warnings = Unloaded()
+    _fandoms = Unloaded()
+    _relationships = Unloaded()
+    _characters = Unloaded()
+    _tags = Unloaded()
+    _summary = Unloaded()
+    _start_notes = Unloaded()
+    _end_notes = Unloaded()
+    _language = Unloaded()
+    _published = Unloaded()
+    _updated = Unloaded()
+    _words = Unloaded()
+    _chapter_count = Unloaded()
+    _chapter_max = Unloaded()
+    _comment_count = Unloaded()
+    _kudos = Unloaded()
+    _bookmarks = Unloaded()
+    _hits = Unloaded()
+    _chapters = Unloaded()
+    _comments = "WIP"
+    _soup = Unloaded()
 
     def __init__(self, work_id=None, load_all_chapters=False):
         if work_id is None:
             return
-        self.__work_id = work_id
-        self.__url = f'{baseURL}/works/{work_id}?show_comments=true{"&view_full_work=true" * load_all_chapters}'
+        self._work_id = work_id
+        self._url = f'{baseURL}/works/{work_id}?view_adult=true&show_comments=true{"&view_full_work=true" * load_all_chapters}'
         self.load()
 
     def load(self, url=None):
         if url is None:
-            url = self.__url
+            url = self._url
+            if url is Unloaded:
+                raise Exception("Work URL must be set internally before a work can be loaded.")
+        print("> Work:load")
         r = request(url)
         if r.status_code != 200:
             raise AO3Exception("Work not found.")
         soup = BeautifulSoup(r.text, 'lxml')
+        self._soup = soup
 
-        self.__url = f'{baseURL}/works/{self.__work_id}?view_comments=true'
-        self.__title = soup.select_one('#workskin .title.heading').text.strip()
-        self.__rating = soup.select_one(':not(#workskin) dd.rating.tags a.tag').text.strip()
-        self.__category = soup.select_one(':not(#workskin) dd.category.tags a.tag').text.strip()
-        self.__authors = \
+        self._url = f'{baseURL}/works/{self._work_id}?view_comments=true'
+        self._title = soup.select_one('#workskin .title.heading').text.strip()
+        self._rating = soup.select_one(':not(#workskin) dd.rating.tags a.tag').text.strip()
+        self._category = soup.select_one(':not(#workskin) dd.category.tags a.tag').text.strip()
+        self._authors = \
             [User.parse_listing(elm) for elm in soup.select('#workskin .preface.group .byline.heading a[rel=author]')]
-        self.__archive_warnings = \
+        self._archive_warnings = \
             soup.select_one(':not(#workskin) dd.warning.tags .tag').text.strip().split(', ')
-        self.__fandoms = [Tag.parse_tag(elm) for elm in soup.select(':not(#workskin) dd.fandom.tags a.tag')]
-        self.__relationships = [Tag.parse_tag(elm) for elm in
+        self._fandoms = [Tag.parse_tag(elm) for elm in soup.select(':not(#workskin) dd.fandom.tags a.tag')]
+        self._relationships = [Tag.parse_tag(elm) for elm in
                                 soup.select(':not(#workskin) dd.relationship.tags a.tag')]
-        self.__characters = [Tag.parse_tag(elm) for elm in soup.select(':not(#workskin) dd.character.tags a.tag')]
-        self.__tags = [Tag.parse_tag(elm) for elm in soup.select(':not(#workskin) dd.freeform.tags a.tag')]
+        self._characters = [Tag.parse_tag(elm) for elm in soup.select(':not(#workskin) dd.character.tags a.tag')]
+        self._tags = [Tag.parse_tag(elm) for elm in soup.select(':not(#workskin) dd.freeform.tags a.tag')]
         try:
-            self.__summary = self._format_text(soup.select_one('#workskin .summary .userstuff'))
+            self._summary = _format_text(soup.select_one('#workskin .summary:not(.chapter) .userstuff'))
         except AttributeError:
             pass
-        self.__start_notes = self._format_text(soup.select_one('#workskin .notes .userstuff'))
-        self.__language = soup.select_one(':not(#workskin) dd.language').text.strip()
+        self._start_notes = _format_text(soup.select_one('#workskin .notes .userstuff'))
+        self._language = soup.select_one(':not(#workskin) dd.language').text.strip()
         try:
-            self.__published = soup.select_one(':not(#workskin) dd.published').text.strip()
+            self._published = soup.select_one(':not(#workskin) dd.published').text.strip()
         except AttributeError:
-            self.__published = None
+            self._published = None
         try:
-            self.__updated = soup.select_one(':not(#workskin) dd.status').text.strip()
+            self._updated = soup.select_one(':not(#workskin) dd.status').text.strip()
         except AttributeError:
-            self.__updated = None
-        self.__words = int(soup.select_one(':not(#workskin) .stats dd.words').text.strip().replace(',', ''))
+            self._updated = None
+        self._words = int(soup.select_one(':not(#workskin) .stats dd.words').text.strip().replace(',', ''))
         chapter_label = soup.select_one(":not(#workskin) .stats dd.chapters").text.strip().split('/')
-        self.__chapter_count = int(chapter_label[0].replace(',', ''))
-        self.__chapter_max = None if chapter_label[1] == '?' else int(chapter_label[1].replace(',', ''))
+        self._chapter_count = int(chapter_label[0].replace(',', ''))
+        self._chapter_max = None if chapter_label[1] == '?' else int(chapter_label[1].replace(',', ''))
         try:
-            self.__comment_count = \
+            self._comment_count = \
                 int(soup.select_one(':not(#workskin) .stats dd.comments').text.strip().replace(',', ''))
         except AttributeError:
-            self.__comment_count = 0
+            self._comment_count = 0
         try:
-            self.__kudos = int(soup.select_one(':not(#workskin) .stats dd.kudos').text.strip().replace(',', ''))
+            self._kudos = int(soup.select_one(':not(#workskin) .stats dd.kudos').text.strip().replace(',', ''))
         except AttributeError:
-            self.__kudos = 0
+            self._kudos = 0
         try:
-            self.__bookmarks = int(soup.select_one(':not(#workskin) .stats dd.bookmarks').text.strip().replace(',', ''))
+            self._bookmarks = int(soup.select_one(':not(#workskin) .stats dd.bookmarks').text.strip().replace(',', ''))
         except AttributeError:
-            self.__bookmarks = 0
+            self._bookmarks = 0
         try:
-            self.__hits = int(soup.select_one(':not(#workskin) .stats dd.hits').text.strip().replace(',', ''))
+            self._hits = int(soup.select_one(':not(#workskin) .stats dd.hits').text.strip().replace(',', ''))
         except AttributeError:
-            self.__hits = 0
+            self._hits = 0
 
-        # TODO: self.__comments = []
-        self.__chapters = [
-            Chapter.parse_index(chapter) for chapter in soup.select(":not(#workskin) li.chapter #selected_id option")
+        # TODO: self._comments = []
+        self._chapters = [
+            Chapter.parse_list_item(chapter, self) for chapter in soup.select(
+                ":not(#workskin) li.chapter #selected_id option")
         ]
-        # HACK: no chapter selector exists if only 1 chapter exists so we need a different way to get chap link and name
-        if len(self.__chapters) > 0:
-            self.__last_chapter_url = self.__chapters[-1].url
-        else:
-            self.__last_chapter_url = url
 
-    def __load_end_notes(self):
-        print(self.__last_chapter_url)
-        r = request(self.__last_chapter_url)
-        if r.status_code != 200:
-            raise AO3Exception("Chapter not found.")
-        soup = BeautifulSoup(r.text, 'lxml')
-        url_parts = self.__last_chapter_url.split('/')
-        chapter_id = url_parts[-2] if len(url_parts[-1].strip()) == 0 else url_parts[-2]
-        super()._check_property(self.__chapters)
-        self.__chapters[-1] = Chapter(chapter_id, soup.select_one("#workskin .chapter"))
+        # HACK: no chapter selector exists if only 1 chapter exists so we need a different way to get chap link and name
+        if len(self._chapters) > 0:
+            self._last_chapter_url = self._chapters[-1].url
+        else:
+            self._last_chapter_url = url
+
+    def _load_end_notes(self):
+        soup = self._chapters[-1].soup
+        self._end_notes = _format_text(soup.select_one('#workskin .afterword .end.notes .userstuff'))
 
     @staticmethod
     def parse_listing(soup):
         work = Work()
-        work.__url = f"{baseURL}{soup.select_one(':not(.userstuff).header h4.heading a:not([ref=author])').get('href')}"
-        work.__work_id = Work.get_work_id_from_url(work.__url)
+        work._url = f"{baseURL}{soup.select_one(':not(.userstuff).header h4.heading a:not([ref=author])').get('href')}"
+        work._work_id = Work.get_work_id_from_url(work._url)
         last_chapter_elm = soup.select_one(':not(.userstuff).stats dd.chapters a')
-        work.__last_chapter_url = work.__url if last_chapter_elm is None else f"{baseURL}{last_chapter_elm.get('href')}"
-        # print("last chapter url: "+)
-        work.__title = soup.select_one(':not(.userstuff).header h4.heading a:not([ref=author])').text.strip()
-        work.__rating = soup.select_one(':not(.userstuff).required-tags li .rating span').text.strip()
-        work.__category = soup.select_one(':not(.userstuff).required-tags li .category span').text.strip()
-        work.__authors = \
+        work._last_chapter_url = work._url if last_chapter_elm is None else f"{baseURL}{last_chapter_elm.get('href')}"
+        work._title = soup.select_one(':not(.userstuff).header h4.heading a:not([ref=author])').text.strip()
+        work._rating = soup.select_one(':not(.userstuff).required-tags li .rating span').text.strip()
+        work._category = soup.select_one(':not(.userstuff).required-tags li .category span').text.strip()
+        work._authors = \
             [User.parse_listing(elm) for elm in soup.select(':not(.userstuff).header .heading a[rel=author]')]
-        work.__archive_warnings = \
+        work._archive_warnings = \
             soup.select_one(':not(.userstuff).required-tags li .warnings span').text.strip().split(', ')
-        work.__fandoms = [Tag.parse_tag(elm) for elm in soup.select(':not(.userstuff) .fandoms a.tag')]
-        work.__relationships = \
+        work._fandoms = [Tag.parse_tag(elm) for elm in soup.select(':not(.userstuff) .fandoms a.tag')]
+        work._relationships = \
             [Tag.parse_tag(elm) for elm in soup.select(':not(.userstuff) ul.tags li.relationships a')]
-        work.__characters = [Tag.parse_tag(elm) for elm in soup.select(':not(.userstuff) ul.tags li.characters a')]
-        work.__tags = [Tag.parse_tag(elm) for elm in soup.select(':not(.userstuff) ul.tags li.freeforms a')]
+        work._characters = [Tag.parse_tag(elm) for elm in soup.select(':not(.userstuff) ul.tags li.characters a')]
+        work._tags = [Tag.parse_tag(elm) for elm in soup.select(':not(.userstuff) ul.tags li.freeforms a')]
         try:
-            work.__summary = AO3Item._format_text(soup.select_one('.userstuff.summary'))
+            work._summary = _format_text(soup.select_one('.userstuff.summary'))
         except AttributeError:
             pass
-        work.__language = soup.select_one(':not(.userstuff).stats dd.language').text.strip()
-        work.__words = int(soup.select_one(':not(.userstuff).stats dd.words').text.strip().replace(',', ''))
+        work._language = soup.select_one(':not(.userstuff).stats dd.language').text.strip()
+        work._words = int(soup.select_one(':not(.userstuff).stats dd.words').text.strip().replace(',', ''))
         chapters = soup.select_one(":not(.userstuff).stats dd.chapters").text.strip().split('/')
-        work.__chapter_count = int(chapters[0].replace(',', ''))
-        work.__chapter_max = None if chapters[1] == '?' else int(chapters[1].replace(',', ''))
+        work._chapter_count = int(chapters[0].replace(',', ''))
+        work._chapter_max = None if chapters[1] == '?' else int(chapters[1].replace(',', ''))
         try:
-            work.__comment_count = \
+            work._comment_count = \
                 int(soup.select_one(':not(.userstuff).stats dd.comments').text.strip().replace(',', ''))
         except AttributeError:
-            work.__comment_count = 0
+            work._comment_count = 0
         try:
-            work.__kudos = int(soup.select_one(':not(.userstuff).stats dd.kudos').text.strip().replace(',', ''))
+            work._kudos = int(soup.select_one(':not(.userstuff).stats dd.kudos').text.strip().replace(',', ''))
         except AttributeError:
-            work.__kudos = 0
+            work._kudos = 0
         try:
-            work.__bookmarks = int(soup.select_one(':not(.userstuff).stats dd.bookmarks').text.strip().replace(',', ''))
+            work._bookmarks = int(soup.select_one(':not(.userstuff).stats dd.bookmarks').text.strip().replace(',', ''))
         except AttributeError:
-            work.__bookmarks = 0
+            work._bookmarks = 0
         try:
-            work.__hits = int(soup.select_one(':not(.userstuff).stats dd.hits').text.strip().replace(',', ''))
+            work._hits = int(soup.select_one(':not(.userstuff).stats dd.hits').text.strip().replace(',', ''))
         except AttributeError:
-            work.__hits = 0
+            work._hits = 0
         return work
 
     @staticmethod
@@ -492,6 +501,7 @@ class Work(AO3Item):
         }
         url = f'{baseURL}/works/search?commit=Search&work_search['
         url += "&work_search[".join([f"{param}]={params[param]}" for param in params.keys()])
+        print("> Work:search")
         r = request(url)
         if r.status_code != 200:
             raise AO3Exception("No works not found.")
@@ -510,167 +520,194 @@ class Work(AO3Item):
 
     @property
     def work_id(self):
-        super()._check_property(self.__work_id)
-        return self.__work_id
+        super()._check_property(self._work_id)
+        return self._work_id
 
     @property
     def title(self):
-        super()._check_property(self.__title)
-        return self.__title
+        super()._check_property(self._title)
+        return self._title
 
     @property
     def url(self):
-        super()._check_property(self.__url)
-        return self.__url
+        super()._check_property(self._url)
+        return self._url
 
     @property
     def authors(self):
-        super()._check_property(self.__authors)
-        return self.__authors
+        super()._check_property(self._authors)
+        return self._authors
 
     @property
     def rating(self):
-        super()._check_property(self.__rating)
-        return self.__rating
+        super()._check_property(self._rating)
+        return self._rating
 
     @property
     def archive_warnings(self):
-        super()._check_property(self.__archive_warnings)
-        return self.__archive_warnings
+        super()._check_property(self._archive_warnings)
+        return self._archive_warnings
 
     @property
     def fandoms(self):
-        super()._check_property(self.__fandoms)
-        return self.__fandoms
+        super()._check_property(self._fandoms)
+        return self._fandoms
 
     @property
     def relationships(self):
-        super()._check_property(self.__relationships)
-        return self.__relationships
+        super()._check_property(self._relationships)
+        return self._relationships
 
     @property
     def characters(self):
-        super()._check_property(self.__characters)
-        return self.__characters
+        super()._check_property(self._characters)
+        return self._characters
 
     @property
     def tags(self):
-        super()._check_property(self.__tags)
-        return self.__tags
+        super()._check_property(self._tags)
+        return self._tags
 
     @property
     def summary(self):
-        super()._check_property(self.__summary)
-        return self.__summary
+        super()._check_property(self._summary)
+        return self._summary
 
     @property
     def start_notes(self):
-        super()._check_property(self.__start_notes)
-        return self.__start_notes
+        super()._check_property(self._start_notes)
+        return self._start_notes
 
     @property
     def end_notes(self):
-        super()._check_property(self.__end_notes, self.__load_end_notes)
-        return self.__end_notes
+        super()._check_property(self._end_notes, self._load_end_notes)
+        return self._end_notes
 
     @property
     def language(self):
-        super()._check_property(self.__language)
-        return self.__language
+        super()._check_property(self._language)
+        return self._language
 
     @property
     def published(self):
-        super()._check_property(self.__published)
-        return self.__published
+        super()._check_property(self._published)
+        return self._published
 
     @property
     def updated(self):
-        super()._check_property(self.__updated)
-        return self.__updated
+        super()._check_property(self._updated)
+        return self._updated
 
     @property
     def words(self):
-        super()._check_property(self.__words)
-        return self.__words
+        super()._check_property(self._words)
+        return self._words
 
     @property
     def chapter_count(self):
-        super()._check_property(self.__chapter_count)
-        return self.__chapter_count
+        super()._check_property(self._chapter_count)
+        return self._chapter_count
 
     @property
     def chapter_max(self):
-        super()._check_property(self.__chapter_max)
-        return self.__chapter_max
+        super()._check_property(self._chapter_max)
+        return self._chapter_max
 
     @property
     def comment_count(self):
-        super()._check_property(self.__comment_count)
-        return self.__comment_count
+        super()._check_property(self._comment_count)
+        return self._comment_count
 
     @property
     def kudos(self):
-        super()._check_property(self.__kudos)
-        return self.__kudos
+        super()._check_property(self._kudos)
+        return self._kudos
 
     @property
     def bookmarks(self):
-        super()._check_property(self.__bookmarks)
-        return self.__bookmarks
+        super()._check_property(self._bookmarks)
+        return self._bookmarks
 
     @property
     def hits(self):
-        super()._check_property(self.__hits)
-        return self.__hits
+        super()._check_property(self._hits)
+        return self._hits
 
     @property
     def chapters(self):
-        super()._check_property(self.__chapters)
-        return self.__chapters
+        super()._check_property(self._chapters)
+        return self._chapters
+
+    @property
+    def soup(self):
+        super()._check_property(self._soup)
+        return self._soup
 
 
 class Chapter(AO3Item):
-    __name = Unloaded()
-    __id = Unloaded()
-    __url = Unloaded()
-    __number = Unloaded()
-    __summary = Unloaded()
-    __start_notes = Unloaded()
-    __end_notes = Unloaded()
-    __content = Unloaded()  # the text of a chapter converted to markdown
-    __content_html = Unloaded()  # the original chapter html
-    __work = Unloaded()
+    _name = Unloaded()
+    _chapter_id = Unloaded()
+    _url = Unloaded()
+    _number = Unloaded()
+    _summary = Unloaded()
+    _start_notes = Unloaded()
+    _end_notes = Unloaded()
+    _content = Unloaded()  # the text of a chapter converted to markdown, do conversion on demand and store to save cpu
+    _content_html = Unloaded()  # the original chapter html
+    # reference to parent work
+    _work = Unloaded()
+    _soup = Unloaded()
 
-    def __init__(self, chapter_id=None, soup=None):
-        if chapter_id is None:
+    def __init__(self, chapter_id=None, work=None):
+        print("init chapter")
+        print((chapter_id, work))
+        if work is None and chapter_id is None:  # no source provided, skip
             return
-        self.__url = f'{baseURL}/chapters/{chapter_id}'
-        self.__id = chapter_id
-        self.load(soup)
+        elif chapter_id is None:  # parse based on current work soup
+            self._url = work._url
+            self._id = None
+            self.load(work.soup, work)
+        else:
+            print("load from chapter id")
+            self._url = f'{baseURL}/chapters/{chapter_id}?view_adult=true&show_comments=true'
+            self._id = chapter_id
+            self.load(None, work)
 
-    def load(self, soup=None):
+    def load(self, soup=None, work=None):
         if soup is None:
-            r = request(self.__url)
+            print("> Chapter:load")
+            r = request(self._url)
             if r.status_code != 200:
                 raise AO3Exception("Chapter not found.")
             soup = BeautifulSoup(r.text, 'lxml')
+        self._soup = soup
         name_parts = soup.select_one("#workskin .chapter .title").text.strip().split(' ')
-        self.__name = ' '.join(name_parts[:2]) if len(name_parts) == 2 else ' '.join(name_parts[2:])
-        self.__number = name_parts[1].replace(':', '')
-        self.__summary = self._format_text(soup.select_one("#workskin .preface .summary .userstuff"))
-        self.__start_notes = self._format_text(soup.select_one("#workskin .preface .notes:not(.end) .userstuff"))
-        self.__end_notes = self._format_text(soup.select_one("#workskin .preface .end.notes .userstuff"))
-        self.__content = None  # the text of a chapter converted to markdown
-        self.__content_html = None  # the original chapter html
-        self.__work = None
+        self._name = ' '.join(name_parts[:2]) if len(name_parts) == 2 else ' '.join(name_parts[2:])
+        self._number = name_parts[1].replace(':', '')
+        self._summary = _format_text(soup.select_one("#workskin .chapter.preface .summary .userstuff"))
+        self._start_notes = _format_text(soup.select_one("#workskin .preface .notes:not(.end) .userstuff"))
+        self._end_notes = _format_text(soup.select_one("#workskin .preface .end.notes .userstuff"))
+        self._content = None  # TODO: the text of a chapter converted to markdown
+        self._content_html = None  # TODO: the original chapter html
+        if work:
+            self._work = work
+        else:
+            work = Work()
+            work._url = baseURL \
+                         + soup.select_one(":not(#workskin) li.chapter.entire a").get("href").split('?')[0] \
+                         + "?view_adult=true&show_comments=true"
+            work._work_id = Work.get_work_id_from_url(work.url)
+            self._work = work
 
     @staticmethod
-    def parse_index(soup):
+    def parse_list_item(soup, work):
         chapter = Chapter()
         parts = soup.text.strip().split(' ')
-        chapter.__name = ' '.join(parts[1:])
-        chapter.__url = f'{baseURL}/chapters/{soup.get("value")}'
-        chapter.__number = parts[0][:-1]
+        chapter._name = ' '.join(parts[1:])
+        chapter._url = f'{baseURL}/chapters/{soup.get("value")}'
+        chapter._number = parts[0][:-1]
+        if work:
+            chapter._work = work
         return chapter
 
     @staticmethod
@@ -683,147 +720,161 @@ class Chapter(AO3Item):
 
     @property
     def name(self):
-        super()._check_property(self.__name)
-        return self.__name
+        super()._check_property(self._name)
+        return self._name
 
     @property
     def id(self):
-        super()._check_property(self.__id)
-        return self.__id
+        super()._check_property(self._id)
+        return self._id
 
     @property
     def url(self):
-        super()._check_property(self.__url)
-        return self.__url
+        super()._check_property(self._url)
+        return self._url
 
     @property
     def number(self):
-        super()._check_property(self.__number)
-        return self.__number
+        super()._check_property(self._number)
+        return self._number
 
     @property
     def summary(self):
-        super()._check_property(self.__summary)
-        return self.__summary
+        super()._check_property(self._summary)
+        return self._summary
 
     @property
     def start_notes(self):
-        super()._check_property(self.__start_notes)
-        return self.__start_notes
+        super()._check_property(self._start_notes)
+        return self._start_notes
 
     @property
     def end_notes(self):
-        super()._check_property(self.__end_notes)
-        return self.__end_notes
+        super()._check_property(self._end_notes)
+        return self._end_notes
 
     @property
     def content(self):
-        super()._check_property(self.__content)
-        return self.__content
+        super()._check_property(self._content)
+        return self._content
 
     @property
     def content_html(self):
-        super()._check_property(self.__content_html)
-        return self.__content_html
+        super()._check_property(self._content_html)
+        return self._content_html
 
     @property
     def work(self):
-        super()._check_property(self.__work)
-        return self.__work
+        super()._check_property(self._work)
+        return self._work
+
+    @property
+    def soup(self):
+        super()._check_property(self._soup)
+        return self._soup
 
 
 class Tag(AO3Item):
-    __name = Unloaded()
-    __url = Unloaded()
-    __type = Unloaded()
-    __canonized = Unloaded()
-    __parents = Unloaded()
-    __synonyms = Unloaded()
-    __mergers = Unloaded()
-    __meta = Unloaded()
-    __characters = Unloaded()
-    __relationships = Unloaded()
-    __tags = Unloaded()
-    __works = Unloaded()
+    _name = Unloaded()
+    _url = Unloaded()
+    _type = Unloaded()
+    _canonized = Unloaded()
+    _parents = Unloaded()
+    _synonyms = Unloaded()
+    _mergers = Unloaded()
+    _meta = Unloaded()
+    _characters = Unloaded()
+    _relationships = Unloaded()
+    _tags = Unloaded()
+    _works = Unloaded()
+    _soup = Unloaded()
 
     def load(self):
+        print("> Tag:load")
         r = request(f"{baseURL}/tags/{self.name.replace('/', '*s*')}/")
         if r.status_code != 200:
             raise AO3Exception("Tag not found.")
         soup = BeautifulSoup(r.text, 'lxml')
-        self.__url = f"{baseURL}/tags/{self.name.replace('/', '*s*').replace(' ', '%20')}/"
-        self.__name = soup.select_one('.header h2.heading').text.strip()
+        self._soup = soup
+        self._url = f"{baseURL}/tags/{self.name.replace('/', '*s*').replace(' ', '%20')}/"
+        self._name = soup.select_one('.header h2.heading').text.strip()
         desc = soup.select_one('.tag.home.profile p').text.strip()
-        self.__type = desc.split(' ')[5]
-        self.__canonized = "It's a common tag" in desc
-        self.__parents = [self.parse_tag(elm) for elm in soup.select('.parent.listbox ul li a.tag')]
-        self.__synonyms = [self.parse_tag(elm) for elm in soup.select('.synonym.listbox ul li a.tag')]
-        self.__mergers = [self.parse_tag(elm) for elm in soup.select('.merger.module ul li a.tag')]
-        self.__meta = [self.parse_tag(elm) for elm in soup.select('.meta.listbox a.tag')]
-        self.__characters = [self.parse_tag(elm) for elm in soup.select('.characters.listbox ul li a.tag')]
-        self.__relationships = [self.parse_tag(elm) for elm in soup.select('.relationships.listbox ul li a.tag')]
-        self.__tags = [self.parse_tag(elm) for elm in soup.select('.freeforms.listbox ul li a.tag')]
+        self._type = desc.split(' ')[5]
+        self._canonized = "It's a common tag" in desc
+        self._parents = [self.parse_tag(elm) for elm in soup.select('.parent.listbox ul li a.tag')]
+        self._synonyms = [self.parse_tag(elm) for elm in soup.select('.synonym.listbox ul li a.tag')]
+        self._mergers = [self.parse_tag(elm) for elm in soup.select('.merger.module ul li a.tag')]
+        self._meta = [self.parse_tag(elm) for elm in soup.select('.meta.listbox a.tag')]
+        self._characters = [self.parse_tag(elm) for elm in soup.select('.characters.listbox ul li a.tag')]
+        self._relationships = [self.parse_tag(elm) for elm in soup.select('.relationships.listbox ul li a.tag')]
+        self._tags = [self.parse_tag(elm) for elm in soup.select('.freeforms.listbox ul li a.tag')]
 
     def __init__(self, name=None):
         if name is None:
             return
-        self.__name = name
+        self._name = name
         self.load()
 
     @property
     def name(self):
-        super()._check_property(self.__name)
-        return self.__name
+        super()._check_property(self._name)
+        return self._name
 
     @property
     def url(self):
-        super()._check_property(self.__url)
-        return self.__url
+        super()._check_property(self._url)
+        return self._url
 
     @property
     def type(self):
-        super()._check_property(self.__type)
-        return self.__type
+        super()._check_property(self._type)
+        return self._type
 
     @property
     def canonized(self):
-        super()._check_property(self.__canonized)
-        return self.__canonized
+        super()._check_property(self._canonized)
+        return self._canonized
 
     @property
     def parents(self):
-        super()._check_property(self.__parents)
-        return self.__parents
+        super()._check_property(self._parents)
+        return self._parents
 
     @property
     def synonyms(self):
-        super()._check_property(self.__synonyms)
-        return self.__synonyms
+        super()._check_property(self._synonyms)
+        return self._synonyms
 
     @property
     def meta(self):
-        super()._check_property(self.__meta)
-        return self.__meta
+        super()._check_property(self._meta)
+        return self._meta
 
     @property
     def characters(self):
-        super()._check_property(self.__characters)
-        return self.__characters
+        super()._check_property(self._characters)
+        return self._characters
 
     @property
     def relationships(self):
-        super()._check_property(self.__relationships)
-        return self.__relationships
+        super()._check_property(self._relationships)
+        return self._relationships
 
     @property
     def tags(self):
-        super()._check_property(self.__tags)
-        return self.__tags
+        super()._check_property(self._tags)
+        return self._tags
+
+    @property
+    def soup(self):
+        super()._check_property(self._soup)
+        return self._soup
 
     @property
     def works(self):
-        if self.__works is None:
-            r = request(f'{self.__url}/works')
+        if self._works is None:
+            print("> Tag:works")
+            r = request(f'{self._url}/works')
             if r.status_code != 200:
                 raise AO3Exception("Unable to find works for this tag.")
             self.soup = BeautifulSoup(r.text, 'lxml')
@@ -832,15 +883,15 @@ class Tag(AO3Item):
                 int(soup.select_one(":not(userstuff) h2.heading").text.strip().split(' ')[4].replace(",", "")) \
                     if soup.select_one(":not(userstuff).pagination") \
                     else int(soup.select_one(":not(userstuff) h2.heading").text.strip().split(' ')[0])
-            self.__works = WorkPagination(f"{self.__url}/works", 20, work_count)
-        return self.__works
+            self._works = WorkPagination(f"{self._url}/works", 20, work_count)
+        return self._works
 
     @staticmethod
     def parse_tag(soup):
         tag = Tag()
-        tag.__name = soup.text.strip()
-        tag.__url = f"{baseURL}/tags/{tag.__name.replace('/', '*s*').replace(' ', '%20')}/"
-        if tag.__url[-6:] == "/works":  # links inconsistently append /works
-            tag.__url = tag.__url[:-6]
+        tag._name = soup.text.strip()
+        tag._url = f"{baseURL}/tags/{tag._name.replace('/', '*s*').replace(' ', '%20')}/"
+        if tag._url[-6:] == "/works":  # links inconsistently append /works
+            tag._url = tag._url[:-6]
 
         return tag
