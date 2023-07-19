@@ -11,7 +11,7 @@ bot = discord.Bot(intents=intents)
 
 @bot.event
 async def on_ready():
-    print('Logged in')
+    print('We have logged in as {0.user}'.format(bot))
     """try:
         work = ao3.Work(38607129)
         #r = requests.get(ao3.baseURL)
@@ -40,6 +40,7 @@ async def work(ctx: discord.ApplicationContext, query: discord.Option(str)):
     # TODO: support parsing chapter
     # TODO: add filter for single embed
     work = None
+    chapter = None
     try:
         if query.isnumeric():
             work = ao3.Work(query)
@@ -49,7 +50,6 @@ async def work(ctx: discord.ApplicationContext, query: discord.Option(str)):
         pass
 
     if work:
-
         if not ctx.channel.nsfw and (work.rating == 'Explicit' and setting(ctx.guild.id, 'restrict_explicit')) \
                 or work.rating == 'Mature' and setting(ctx.guild.id, 'restrict_mature'):
             embed = discord.Embed(
@@ -66,7 +66,12 @@ async def work(ctx: discord.ApplicationContext, query: discord.Option(str)):
             )
             return
 
-        embed = get_work_embed(work, ctx.user.id)
+        try:
+            chapter = ao3.Chapter.get_chapter_id_from_url(query)
+        except ao3.AO3Exception:
+            pass
+
+        embed = get_work_embed(work, chapter, ctx.user.id)
 
         # handle error generating embed
         if embed is Exception:
@@ -157,9 +162,9 @@ async def filters(ctx,
 
 @config.command(description="promo channels automatically delete all messages that don't contain an ao3 link")
 async def promo_channel(ctx: discord.ApplicationContext,
-                         option: discord.Option(str, choices=['add', 'remove']),
-                         channel: discord.Option(discord.TextChannel)
-                         ):
+                        option: discord.Option(str, choices=['add', 'remove']),
+                        channel: discord.Option(discord.TextChannel)
+                        ):
     promo_channels = setting(ctx.guild.id, 'promo_channels')
     if option == 'add':
         if channel.id not in promo_channels:
@@ -231,6 +236,8 @@ async def on_message(message):
         return
 
     work = ao3.Work(ao3.Work.get_work_id_from_url(url))
+    chapter = None
+
     if (not message.channel.nsfw) \
             and ((work.rating == 'Explicit' and setting(message.guild.id, 'restrict_explicit'))
                  or (work.rating == 'Mature' and setting(message.guild.id, 'restrict_mature'))):
@@ -249,7 +256,15 @@ async def on_message(message):
         await message.delete()
         return
 
-    work_embed = get_work_embed(work, message.author.id)
+    try:
+        chapter_id = ao3.Chapter.get_chapter_id_from_url(url)
+        if chapter_id is None:
+            raise Exception()
+        chapter = ao3.Chapter(chapter_id)
+    except Exception:
+        pass
+
+    work_embed = get_work_embed(work, chapter, message.author.id)
     await message.edit(suppress=True)
     await message.reply(embed=work_embed)
 
@@ -267,8 +282,6 @@ async def on_raw_reaction_add(reaction):
             user_id = int(message.embeds[0].footer.text.split('|')[-1].strip())
             if user_id == reaction.user_id:
                 await message.delete()
-            """else:
-                await reaction."""
         except ValueError:
             return
 
